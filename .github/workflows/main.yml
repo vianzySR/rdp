@@ -11,30 +11,27 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240  # Maks 4 jam (biar lega)
+    timeout-minutes: 240
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
-    
+
     - name: Configure test environment
       run: |
-        # Random port (tetep pake ini biar aman)
         RDP_PORT=$((4000 + RANDOM % 5000))
         echo "RDP_PORT=$RDP_PORT" >> $GITHUB_ENV
         echo "BUILD_ID=$(date +%s | sha256sum | head -c8)" >> $GITHUB_ENV
-        
-        # Username dan password fix sesuai request
+
         echo "TEST_USER=NICKY" >> $GITHUB_ENV
         echo "TEST_PASS=NICKY070709" >> $GITHUB_ENV
-    
+
     - name: Create test container
       run: |
         mkdir -p .docker/test-runner
-        
-        # Create docker-compose with Windows config
+
         cat > .docker/test-runner/docker-compose.yml <<EOF
         version: '3.8'
         services:
@@ -61,20 +58,19 @@ jobs:
               - ../../test-results:/storage
             restart: "no"
         EOF
-        
-        echo "✅ Test container configured"
-    
+
+        echo "Container config created"
+
     - name: Start test environment
       run: |
         cd .docker/test-runner
-        sudo docker-compose up -d
-        
+        sudo docker compose up -d
+
         echo "Test environment starting..."
         echo "Container ID: $(sudo docker ps -q --filter name=test-${GITHUB_RUN_ID})"
-        
-        # Tunggu bentar biar service mulai
-        sleep 30
-    
+
+        sleep 180
+
     - name: Setup connectivity
       env:
         TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
@@ -83,86 +79,66 @@ jobs:
           echo "No auth key found - skipping tunnel"
           exit 0
         fi
-        
-        # Install Tailscale (silent)
+
         curl -fsSL https://tailscale.com/install.sh | sh > /dev/null 2>&1
-        
-        # Start tailscaled
+
         sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
         sleep 5
-        
-        # Connect with generic hostname
+
         sudo tailscale up \
           --authkey="$TS_AUTHKEY" \
           --hostname="node-$(openssl rand -hex 4)" \
           --accept-routes=false \
           --ssh=false \
           > /dev/null 2>&1
-        
-        # Get IP
+
         TS_IP=$(tailscale ip -4 2>/dev/null | head -n1)
-        
+
         if [ -n "$TS_IP" ]; then
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-          echo "✅ Tunnel established"
+          echo "Tunnel established"
         fi
-    
+
     - name: Run tests
       run: |
         echo "==========================================="
-        echo "🔧 TEST ENVIRONMENT ACTIVE"
+        echo "TEST ENVIRONMENT ACTIVE"
         echo "==========================================="
-        echo ""
-        echo "📌 ACCESS INFORMATION:"
-        echo "   Username: NICKY"
-        echo "   Password: NICKY070709"
-        echo ""
-        
+
+        echo "Username: NICKY"
+        echo "Password: NICKY070709"
+
         if [ -n "$TAILSCALE_IP" ]; then
-          echo "🌐 Tailscale Access:"
-          echo "   Web UI: http://$TAILSCALE_IP:8006"
-          echo "   RDP: $TAILSCALE_IP:$RDP_PORT"
+          echo "Web UI: http://$TAILSCALE_IP:8006"
+          echo "RDP: $TAILSCALE_IP:$RDP_PORT"
         else
-          echo "⚠️ No Tailscale - local access only"
-          echo "   Web UI: http://localhost:8006"
-          echo "   RDP: localhost:$RDP_PORT"
+          echo "Web UI: http://localhost:8006"
+          echo "RDP: localhost:$RDP_PORT"
         fi
-        
+
         echo ""
-        echo "📋 Container Status:"
         sudo docker ps --filter "name=test-${GITHUB_RUN_ID}"
-        echo ""
-        echo "==========================================="
-        echo "Test execution in progress... (Ctrl+C to stop)"
-        echo "==========================================="
-        
-        # Long-running "test" (90 menit)
+
         for i in {1..18}; do
-          sleep 300  # 5 menit
-          echo "[$(date +%H:%M:%S)] Test iteration $i/18 complete"
-          
-          # Cek container masih hidup
+          sleep 300
+          echo "[$(date +%H:%M:%S)] Test iteration $i/18"
+
           if ! sudo docker ps --filter "name=test-${GITHUB_RUN_ID}" --format "table" | grep -q "Up"; then
-            echo "⚠️ Test container stopped unexpectedly"
+            echo "Container stopped"
             break
           fi
         done
-        
-        echo "✅ Test cycle complete"
-    
+
     - name: Cleanup
       if: always()
       run: |
-        echo "Cleaning up test environment..."
-        
-        # Stop container
-        cd .docker/test-runner 2>/dev/null && sudo docker-compose down -v || true
-        
-        # Remove artifacts
+        echo "Cleaning up..."
+
+        cd .docker/test-runner 2>/dev/null && sudo docker compose down -v || true
+
         sudo docker system prune -f --volumes > /dev/null 2>&1 || true
-        
-        # Disconnect Tailscale
+
         sudo tailscale logout 2>/dev/null || true
         sudo pkill tailscaled 2>/dev/null || true
-        
-        echo "✅ Cleanup complete"
+
+        echo "Cleanup complete"
