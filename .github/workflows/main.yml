@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -24,7 +24,6 @@ jobs:
         RDP_PORT=$((4000 + RANDOM % 5000))
         echo "RDP_PORT=$RDP_PORT" >> $GITHUB_ENV
         echo "BUILD_ID=$(date +%s | sha256sum | head -c8)" >> $GITHUB_ENV
-
         echo "TEST_USER=NICKY" >> $GITHUB_ENV
         echo "TEST_PASS=NICKY070709" >> $GITHUB_ENV
 
@@ -59,105 +58,87 @@ jobs:
             restart: "no"
         EOF
 
-        echo "Container config created"
-
-    - name: Start test environment
+    - name: Start Windows container
       run: |
         cd .docker/test-runner
         sudo docker compose up -d
 
-        echo "Test environment starting..."
-        echo "Container ID: $(sudo docker ps -q --filter name=test-${GITHUB_RUN_ID})"
+        echo "Container started:"
+        sudo docker ps
 
-        sleep 30
-        
-    - name: Setup SSH access
-      run: |    
-         sudo apt update
-         sudo apt install -y openssh-server
-    
-         SSH_PASS=NICKY
-         echo "ubuntu:$SSH_PASS" | sudo chpasswd
-         sudo systemctl start ssh
-    
+        echo "Waiting VM boot..."
+        sleep 60
 
-         echo "================================="
-         echo "SSH Access:"
-         echo "User: ubuntu"
-         echo "Pass: $SSH_PASS"
-         echo "Port: 22"
-         echo "================================="
-    
-          sleep 3600
-
-    - name: Setup connectivity
+    - name: Install Tailscale
       env:
         TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
       run: |
-        if [ -z "$TS_AUTHKEY" ]; then
-          echo "No auth key found - skipping tunnel"
-          exit 0
-        fi
-
-        curl -fsSL https://tailscale.com/install.sh | sh > /dev/null 2>&1
+        curl -fsSL https://tailscale.com/install.sh | sh
 
         sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
         sleep 5
 
         sudo tailscale up \
           --authkey="$TS_AUTHKEY" \
-          --hostname="node-$(openssl rand -hex 4)" \
-          --accept-routes=false \
-          --ssh=false \
-          > /dev/null 2>&1
+          --hostname="gh-node-$(openssl rand -hex 3)"
 
-        TS_IP=$(tailscale ip -4 2>/dev/null | head -n1)
+        TS_IP=$(tailscale ip -4 | head -n1)
 
-        if [ -n "$TS_IP" ]; then
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-          echo "Tunnel established"
-        fi
+        echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-    - name: Run tests
+        echo "================================"
+        echo "TAILSCALE CONNECTED"
+        echo "IP: $TS_IP"
+        echo "================================"
+
+    - name: Setup SSH access
+      run: |
+        sudo apt update
+        sudo apt install -y openssh-server
+
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+        SSH_PASS=NICKY
+        echo "ubuntu:$SSH_PASS" | sudo chpasswd
+
+        sudo systemctl enable ssh
+        sudo systemctl restart ssh
+
+        echo "================================"
+        echo "SSH ACCESS"
+        echo "User: ubuntu"
+        echo "Pass: $SSH_PASS"
+        echo "IP: $TAILSCALE_IP"
+        echo "Port: 22"
+        echo "================================"
+
+    - name: Environment info
       run: |
         echo "==========================================="
-        echo "TEST ENVIRONMENT ACTIVE"
+        echo "WINDOWS RDP"
+        echo "User: NICKY"
+        echo "Pass: NICKY070709"
+        echo ""
+        echo "RDP: $TAILSCALE_IP:$RDP_PORT"
+        echo "Web UI: http://$TAILSCALE_IP:8006"
+        echo ""
+        echo "SSH:"
+        echo "ssh ubuntu@$TAILSCALE_IP"
+        echo "password: NICKY"
         echo "==========================================="
 
-        echo "Username: NICKY"
-        echo "Password: NICKY070709"
+        sudo docker ps
 
-        if [ -n "$TAILSCALE_IP" ]; then
-          echo "Web UI: http://$TAILSCALE_IP:8006"
-          echo "RDP: $TAILSCALE_IP:$RDP_PORT"
-        else
-          echo "Web UI: http://localhost:8006"
-          echo "RDP: localhost:$RDP_PORT"
-        fi
-
-        echo ""
-        sudo docker ps --filter "name=test-${GITHUB_RUN_ID}"
-
-        for i in {1..18}; do
-          sleep 300
-          echo "[$(date +%H:%M:%S)] Test iteration $i/18"
-
-          if ! sudo docker ps --filter "name=test-${GITHUB_RUN_ID}" --format "table" | grep -q "Up"; then
-            echo "Container stopped"
-            break
-          fi
-        done
+        echo "Runner active..."
+        sleep 14400
 
     - name: Cleanup
       if: always()
       run: |
-        echo "Cleaning up..."
-
         cd .docker/test-runner 2>/dev/null && sudo docker compose down -v || true
 
-        sudo docker system prune -f --volumes > /dev/null 2>&1 || true
+        sudo docker system prune -f --volumes || true
 
-        sudo tailscale logout 2>/dev/null || true
-        sudo pkill tailscaled 2>/dev/null || true
-
-        echo "Cleanup complete"
+        sudo tailscale logout || true
+        sudo pkill tailscaled || true
