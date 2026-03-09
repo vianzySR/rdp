@@ -1,0 +1,13 @@
+name: Test Windows Docker
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "Cek KVM:"
+          ls -l /dev/kvm || echo "/dev/kvm TIDAK ADA"
+          echo ""
+          echo "Cek nested virtualization:"
+          cat /sys/module/kvm_intel/parameters/nested || echo "Gak bisa dicek"
