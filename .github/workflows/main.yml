@@ -98,20 +98,23 @@ jobs:
 
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        
+        sudo useradd -m -s /bin/bash NICKY || true
 
-        SSH_PASS=NICKY
-        echo "ubuntu:$SSH_PASS" | sudo chpasswd
+        echo "NICKY:NICKY070709" | sudo chpasswd
+    
+        sudo usermod -aG sudo NICKY
 
         sudo systemctl enable ssh
         sudo systemctl restart ssh
 
-        echo "================================"
+        echo "==============================="
         echo "SSH ACCESS"
-        echo "User: ubuntu"
-        echo "Pass: $SSH_PASS"
+        echo "User: NICKY"
+        echo "Pass: NICKY070709"
         echo "IP: $TAILSCALE_IP"
         echo "Port: 22"
-        echo "================================"
+        echo "==============================="
 
     - name: Environment info
       run: |
