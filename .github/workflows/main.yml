@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     steps:
     - name: Checkout code
@@ -67,7 +67,7 @@ jobs:
         sudo docker ps
 
         echo "Waiting VM boot..."
-        sleep 60
+        sleep 30
 
     - name: Install Tailscale
       env:
@@ -80,7 +80,7 @@ jobs:
 
         sudo tailscale up \
           --authkey="$TS_AUTHKEY" \
-          --hostname="gh-node-$(openssl rand -hex 3)"
+          --hostname="gh-node-${RDP_PORT}"
 
         TS_IP=$(tailscale ip -4 | head -n1)
 
@@ -89,6 +89,7 @@ jobs:
         echo "================================"
         echo "TAILSCALE CONNECTED"
         echo "IP: $TS_IP"
+        echo "HOSTNAME: gh-node-${RDP_PORT}"
         echo "================================"
 
     - name: Setup SSH access
@@ -100,9 +101,7 @@ jobs:
         sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
         
         sudo useradd -m -s /bin/bash NICKY || true
-
         echo "NICKY:NICKY070709" | sudo chpasswd
-    
         sudo usermod -aG sudo NICKY
 
         sudo systemctl enable ssh
@@ -125,16 +124,17 @@ jobs:
         echo ""
         echo "RDP: $TAILSCALE_IP:$RDP_PORT"
         echo "Web UI: http://$TAILSCALE_IP:8006"
+        echo "Hostname: gh-node-${RDP_PORT}"
         echo ""
         echo "SSH:"
-        echo "ssh ubuntu@$TAILSCALE_IP"
-        echo "password: NICKY"
+        echo "ssh NICKY@$TAILSCALE_IP"
+        echo "password: NICKY070709"
         echo "==========================================="
 
         sudo docker ps
 
-        echo "Runner active..."
-        sleep 14400
+        echo "Runner active for 6 hours..."
+        sleep 21600
 
     - name: Cleanup
       if: always()
