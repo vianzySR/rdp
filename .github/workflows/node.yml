@@ -23,11 +23,7 @@ jobs:
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
-          sudo nohup tailscaled \
-            --tun=userspace-networking \
-            --socks5-server=localhost:1055 \
-            > /tmp/tailscaled.log 2>&1 &
-
+          sudo systemctl enable --now tailscaled
           sleep 5
 
           sudo tailscale up \
@@ -45,9 +41,9 @@ jobs:
           mkdir -p qemu
 
           if [ -e /dev/kvm ]; then
-            KVM_DEVICE="- /dev/kvm"
+            KVM_LINE="- /dev/kvm"
           else
-            KVM_DEVICE=""
+            KVM_LINE=""
           fi
 
           cat > docker-compose.yml <<EOF
@@ -55,18 +51,17 @@ jobs:
             qemu:
               image: qemux/qemu
               container_name: qemu
+              network_mode: host
               environment:
                 BOOT: "kali"
                 RAM_SIZE: "4G"
                 CPU_CORES: "2"
                 DISK_SIZE: "32G"
               devices:
-                ${KVM_DEVICE}
+                ${KVM_LINE}
                 - /dev/net/tun
               cap_add:
                 - NET_ADMIN
-              ports:
-                - "0.0.0.0:8006:8006"
               volumes:
                 - ./qemu:/storage
               restart: "no"
@@ -80,40 +75,39 @@ jobs:
           sudo docker compose up -d
           sudo docker ps -a
 
-      - name: Wait for port 8006
+      - name: Wait for Web UI
         run: |
-          echo "Waiting for QEMU Web UI..."
+          echo "Waiting for port 8006..."
 
           for i in {1..120}; do
             if curl -s http://127.0.0.1:8006 >/dev/null; then
-              echo "Port 8006 is ready"
+              echo "Web UI ready"
               break
             fi
 
-            echo "Waiting... $i"
+            echo "Waiting $i..."
             sudo docker ps -a
+            sudo docker logs qemu --tail 30 || true
             sleep 5
           done
 
           echo "Listening ports:"
           sudo netstat -tulpn | grep 8006 || true
 
-          echo "QEMU logs:"
-          sudo docker logs qemu --tail 80 || true
+          echo "Local test:"
+          curl -I http://127.0.0.1:8006 || true
+
+          echo "Tailnet test:"
+          curl -I http://$TAILSCALE_IP:8006 || true
 
       - name: Access info
         run: |
-          echo "======================================"
-          echo "KALI QEMU READY"
-          echo ""
-          echo "Open this:"
+          echo "================================"
+          echo "OPEN:"
           echo "http://$TAILSCALE_IP:8006"
           echo ""
-          echo "Tailscale IP:"
-          echo "$TAILSCALE_IP"
-          echo ""
-          echo "Active for 4 hours"
-          echo "======================================"
+          echo "If browser still refused, check logs above."
+          echo "================================"
 
           sleep 14400
 
@@ -121,6 +115,6 @@ jobs:
         if: always()
         run: |
           sudo docker compose down -v || true
+          sudo docker rm -f qemu || true
           sudo docker system prune -f --volumes || true
           sudo tailscale logout || true
-          sudo pkill tailscaled || true
