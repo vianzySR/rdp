@@ -1,216 +1,115 @@
-name: test
+name: Android VNC Test
 
 on:
   workflow_dispatch:
-    inputs:
-      test_type:
-        description: 'Test type'
-        default: 'standard'
-        required: false
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  android-vnc:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 240
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Configure test environment
-      run: |
-        RDP_PORT=$((4000 + RANDOM % 5000))
-        echo "RDP_PORT=$RDP_PORT" >> $GITHUB_ENV
-        echo "BUILD_ID=$(date +%s | sha256sum | head -c8)" >> $GITHUB_ENV
-        echo "TEST_USER=${{ secrets.WIN_USER }}" >> $GITHUB_ENV
-        echo "TEST_PASS=${{ secrets.WIN_PASS }}" >> $GITHUB_ENV
-        echo "SSH_USER=${{ secrets.SSH_USER }}" >> $GITHUB_ENV
-        echo "SSH_PASS=${{ secrets.SSH_PASS }}" >> $GITHUB_ENV
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y megatools zstd openssh-server curl
+      - name: Install desktop, VNC, noVNC, Android tools
+        run: |
+          sudo apt update
+          sudo apt install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc websockify android-sdk
 
-    - name: Prepare Windows storage
-      run: |
-        mkdir -p /home/runner/work/rdp/rdp/test-results
-        ls -lah /home/runner/work/rdp/rdp/test-results
+      - name: Install Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
+          sleep 5
+          sudo tailscale up --authkey="$TS_AUTHKEY" --hostname="android-vnc-${GITHUB_RUN_ID}"
+          echo "TAILSCALE_IP=$(tailscale ip -4 | head -n1)" >> $GITHUB_ENV
 
-    - name: Download Windows state from Mega
-      run: |
-        cd /home/runner/work/rdp/rdp/test-results
+      - name: Start VNC desktop
+        run: |
+          mkdir -p ~/.vnc
+          echo "NICKY070709" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
 
-        echo "Downloading data.img.zst from Mega..."
-        megadl "https://mega.nz/file/sQlHSZQK#5PLx6t69VuS5-oZJAGdzmRH7jhT-oR0QCGsGE_oAMTo"
+          cat > ~/.vnc/xstartup <<EOF
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          startxfce4 &
+          EOF
+          chmod +x ~/.vnc/xstartup
 
-        echo "Downloading windows.vars from Mega..."
-        megadl "https://mega.nz/file/YIVHmAjK#9VV8ndrx2TWKirOEWLD77pXs7IWn_lbyj6dzgM9upJs"
+          vncserver :1 -geometry 1280x720 -depth 24
+          websockify --web=/usr/share/novnc/ 6080 localhost:5901 > /tmp/novnc.log 2>&1 &
 
-        echo "Files after Mega download:"
-        ls -lah
+      - name: Setup Android SDK Emulator
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "emulator" "platforms;android-35" "system-images;android-35;google_apis;x86_64"
 
-    - name: Normalize downloaded filenames
-      run: |
-        cd /home/runner/work/rdp/rdp/test-results
+          echo "no" | avdmanager create avd \
+            -n test_android \
+            -k "system-images;android-35;google_apis;x86_64" \
+            --device "pixel_6"
 
-        ZST_FILE=$(find . -maxdepth 1 -type f -name "*.zst" | head -n1)
-        VARS_FILE=$(find . -maxdepth 1 -type f -name "*.vars" | head -n1)
+      - name: Start Android Emulator GUI
+        run: |
+          export DISPLAY=:1
+          emulator -avd test_android \
+            -gpu swiftshader_indirect \
+            -no-audio \
+            -no-boot-anim \
+            -netdelay none \
+            -netspeed full > /tmp/emulator.log 2>&1 &
 
-        if [ -n "$ZST_FILE" ] && [ "$ZST_FILE" != "./data.img.zst" ]; then
-          mv "$ZST_FILE" ./data.img.zst
-        fi
+          adb wait-for-device
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
 
-        if [ -n "$VARS_FILE" ] && [ "$VARS_FILE" != "./windows.vars" ]; then
-          mv "$VARS_FILE" ./windows.vars
-        fi
+      - name: Install and run APK
+        run: |
+          adb devices
 
-        echo "Normalized files:"
-        ls -lah
+          # taruh APK kamu di repo dengan nama app.apk
+          adb install -r app.apk
 
-    - name: Restore Windows disk image
-      run: |
-        cd /home/runner/work/rdp/rdp/test-results
+          # ganti com.example.app dengan package app kamu
+          adb shell monkey -p com.example.app -c android.intent.category.LAUNCHER 1
 
-        if [ ! -f data.img.zst ]; then
-          echo "data.img.zst not found"
-          exit 1
-        fi
+      - name: Access info
+        run: |
+          echo "===================================="
+          echo "Android VNC aktif"
+          echo ""
+          echo "noVNC:"
+          echo "http://$TAILSCALE_IP:6080/vnc.html"
+          echo ""
+          echo "VNC:"
+          echo "$TAILSCALE_IP:5901"
+          echo "Password: NICKY070709"
+          echo ""
+          echo "ADB:"
+          adb devices
+          echo "===================================="
 
-        if [ ! -f windows.vars ]; then
-          echo "windows.vars not found"
-          exit 1
-        fi
+          sleep 14400
 
-        echo "Extracting data.img.zst ..."
-        zstd -d -f data.img.zst -o data.img
-
-        echo "Restored files:"
-        ls -lah
-        du -sh data.img windows.vars
-
-    - name: Create test container
-      run: |
-        mkdir -p .docker/test-runner
-
-        cat > .docker/test-runner/docker-compose.yml <<EOF
-        version: '3.8'
-        services:
-          test-runner:
-            image: dockurr/windows
-            container_name: test-${GITHUB_RUN_ID}
-            environment:
-              VERSION: "11"
-              USERNAME: "${TEST_USER}"
-              PASSWORD: "${TEST_PASS}"
-              RAM_SIZE: "12G"
-              CPU_CORES: "4"
-              DISK_SIZE: "64G"
-            devices:
-              - /dev/kvm
-              - /dev/net/tun
-            cap_add:
-              - NET_ADMIN
-            ports:
-              - "${RDP_PORT}:3389/tcp"
-              - "${RDP_PORT}:3389/udp"
-              - "8006:8006"
-            volumes:
-              - ../../test-results:/storage
-            restart: "no"
-        EOF
-
-        echo "Generated docker-compose.yml:"
-        cat .docker/test-runner/docker-compose.yml
-
-    - name: Start Windows container
-      run: |
-        cd .docker/test-runner
-        sudo docker compose up -d
-
-        echo "Container started:"
-        sudo docker ps
-
-        echo "Waiting VM boot..."
-        sleep 60
-
-    - name: Install Tailscale
-      env:
-        TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-      run: |
-        curl -fsSL https://tailscale.com/install.sh | sh
-
-        sudo nohup tailscaled > /tmp/tailscaled.log 2>&1 &
-        sleep 5
-
-        sudo tailscale up \
-          --authkey="$TS_AUTHKEY" \
-          --hostname="gh-node-${RDP_PORT}"
-
-        TS_IP=$(tailscale ip -4 | head -n1)
-
-        echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
-        echo "================================"
-        echo "TAILSCALE CONNECTED"
-        echo "IP: $TS_IP"
-        echo "HOSTNAME: gh-node-${RDP_PORT}"
-        echo "================================"
-
-    - name: Setup SSH access
-      run: |
-        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
-        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
-
-        sudo useradd -m -s /bin/bash "${SSH_USER}" || true
-        echo "${SSH_USER}:${SSH_PASS}" | sudo chpasswd
-        sudo usermod -aG sudo "${SSH_USER}"
-
-        sudo systemctl enable ssh
-        sudo systemctl restart ssh
-
-        echo "==============================="
-        echo "SSH ACCESS"
-        echo "User: ${SSH_USER}"
-        echo "IP: $TAILSCALE_IP"
-        echo "Port: 22"
-        echo "==============================="
-
-    - name: Environment info
-      run: |
-        echo "==========================================="
-        echo "WINDOWS RDP"
-        echo "User: ${TEST_USER}"
-        echo "Pass: [FROM SECRET]"
-        echo ""
-        echo "RDP: $TAILSCALE_IP:$RDP_PORT"
-        echo "Web UI: http://$TAILSCALE_IP:8006"
-        echo "Hostname: gh-node-${RDP_PORT}"
-        echo ""
-        echo "SSH:"
-        echo "ssh ${SSH_USER}@$TAILSCALE_IP"
-        echo "password: [FROM SECRET]"
-        echo "==========================================="
-
-        echo "Storage contents:"
-        ls -lah /home/runner/work/rdp/rdp/test-results || true
-
-        echo "Running containers:"
-        sudo docker ps
-
-        echo "Runner active for 6 hours..."
-        sleep 21600
-
-    - name: Cleanup
-      if: always()
-      run: |
-        cd .docker/test-runner 2>/dev/null && sudo docker compose down || true
-        sudo docker system prune -f --volumes || true
-        sudo tailscale logout || true
-        sudo pkill tailscaled || true
+      - name: Cleanup
+        if: always()
+        run: |
+          vncserver -kill :1 || true
+          adb emu kill || true
+          sudo tailscale logout || true
+          sudo pkill tailscaled || true
