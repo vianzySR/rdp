@@ -1,4 +1,4 @@
-name: CI Optimization
+name: CI Optimization Win 10
 
 on:
   workflow_dispatch:
