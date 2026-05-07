@@ -44,9 +44,9 @@ jobs:
               VERSION: "11"
               USERNAME: "${ADMIN_USER}"
               PASSWORD: "${ADMIN_PASS}"
-              RAM_SIZE: "14G"
+              RAM_SIZE: "8G"
               CPU_CORES: "4"
-              DISK_SIZE: "64G"              
+              DISK_SIZE: "70G"              
             devices:
               - /dev/kvm
               - /dev/net/tun
